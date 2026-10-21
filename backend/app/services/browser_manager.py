@@ -25,6 +25,7 @@ class BrowserManager:
             f"--remote-debugging-port={self.debugging_port}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--user-data-dir=C:\\temp\\chrome_dev_session",
             "about:blank"
         ]
         if self.headless:
@@ -36,13 +37,12 @@ class BrowserManager:
             stderr=subprocess.DEVNULL
         )
         
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
 
         ws_url = self._get_websocket_target_url()
         if not ws_url:
             raise RuntimeError("Could not retrieve Chrome DevTools Protocol WebSocket URL.")
 
-        # Establish WebSocket connection
         self.websocket = await websockets.connect(ws_url)
 
     def _get_websocket_target_url(self) -> Optional[str]:

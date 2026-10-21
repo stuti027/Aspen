@@ -70,7 +70,7 @@ class FunctionalityAgent:
         results = []
         for step in steps:
             action_type = step.get("action")
-            params = step.get("params", {{}})
+            params = step.get("params", {})
             
             print(f"Executing step: {action_type} with params {params}")
             result = await self.executor.execute_action(action_type, params)
