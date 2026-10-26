@@ -7,11 +7,11 @@ class TimeSimulator:
         self.browser = browser_manager
         self._faked_time_offset_ms = 0
 
-    async def install_fake_clock(self, initial_epoch_ms: Optional[int] = None):
+    async def install_fake_clock(self, initial_offset_ms: int = 0):
         time_patch_script = f"""
         (() => {{
             const OriginalDate = window.Date;
-            let currentOffset = 0;
+            let currentOffset = {initial_offset_ms};
             
             window.__setAspenTimeOffset = (offset) => {{
                 currentOffset = offset;
