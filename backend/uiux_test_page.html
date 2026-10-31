@@ -1,0 +1,74 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aspen UIUX Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            margin: 0;
+        }
+
+        .overflow {
+            width: 1200px;
+            background: lightblue;
+            padding: 20px;
+        }
+
+        .small-text {
+            font-size: 10px;
+        }
+
+        .low-contrast {
+            color: #cccccc;
+            background-color: #ffffff;
+        }
+
+        .tiny-button {
+            width: 15px;
+            height: 15px;
+        }
+
+        .offscreen {
+            position: absolute;
+            left: -500px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Aspen Testing Page</h1>
+    </header>
+
+    <main>
+        <h3>Heading hierarchy test</h3>
+
+        <div class="overflow">
+            This container deliberately causes horizontal overflow.
+        </div>
+
+        <p class="small-text">
+            This text is deliberately too small.
+        </p>
+
+        <p class="low-contrast">
+            This text has deliberately poor contrast.
+        </p>
+
+        <img src="missing-image.png">
+
+        <form>
+            <input type="text" placeholder="Unlabelled input">
+        </form>
+
+        <button class="tiny-button" aria-label="Tiny button"></button>
+
+        <button class="offscreen">Offscreen button</button>
+
+        <a href="#">Placeholder link</a>
+    </main>
+</body>
+</html>

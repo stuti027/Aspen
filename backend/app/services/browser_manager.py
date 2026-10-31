@@ -4,6 +4,8 @@ import subprocess
 import urllib.request
 from typing import Optional, Dict, Any
 import websockets
+import os
+import shutil
 
 class BrowserManager:
     def __init__(self, headless: bool = False, debugging_port: int = 9222):
@@ -18,7 +20,17 @@ class BrowserManager:
         return self._message_id
 
     async def start(self):
-        chrome_path = "chrome"  # whatever is the path to your Chrome/Chromium exe
+        chrome_path = (
+            os.getenv("CHROME_PATH")
+            or shutil.which("chrome")
+            or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        )
+
+        if not os.path.isfile(chrome_path):
+            raise FileNotFoundError(
+                f"Chrome executable not found: {chrome_path}. "
+                "Set the CHROME_PATH environment variable to its location."
+            )
         
         args = [
             chrome_path,
@@ -93,8 +105,26 @@ class BrowserManager:
         await asyncio.sleep(2)
 
     async def evaluate_script(self, expression: str) -> Any:
-        result = await self.send_command("Runtime.evaluate", {"expression": expression, "returnByValue": True})
-        return result.get("result", {}).get("value")
+        result = await self.send_command(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True
+            }
+        )
+
+        if result.get("exceptionDetails"):
+            raise RuntimeError(
+                f"JavaScript execution failed: {result['exceptionDetails']}"
+            )
+
+        remote_result = result.get("result", {})
+
+        if remote_result.get("type") == "undefined":
+            return None
+
+        return remote_result.get("value")
 
     async def get_page_title(self) -> str:
         title = await self.evaluate_script("document.title")
