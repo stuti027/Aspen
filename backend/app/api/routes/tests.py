@@ -1,4 +1,3 @@
-
 import os
 from pathlib import Path
 from typing import List, Dict, Any
@@ -56,7 +55,7 @@ async def run_custom_test(payload: TestExecutionRequest):
         results = await agent.run_workflow(full_steps)
 
         current_file_dir = Path(__file__).resolve().parent
-        backend_dir = current_file_dir.parents[1]
+        backend_dir = current_file_dir.parents[2]
         static_dir = backend_dir / "static"
         os.makedirs(static_dir, exist_ok=True)
         screenshot_path = os.path.join(static_dir, "latest_screenshot.png")
