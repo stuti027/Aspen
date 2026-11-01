@@ -5,6 +5,7 @@ from app.core.logging import setup_logging
 from app.core.errors import global_exception_handler
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 
 setup_logging()
 app = FastAPI(
@@ -40,7 +41,14 @@ app.include_router(
     prefix="/api",
 )
 
+@app.get("/")
+def read_root():
+    return RedirectResponse(url="/docs")
+
 
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+backend_dir = Path(__file__).resolve().parent.parent 
+app.mount("/static", StaticFiles(directory=str(backend_dir / "static")), name="static")
