@@ -446,6 +446,7 @@ class UIUXAgent:
         self,
         url: str,
         evidence_dir: str = "artifacts/uiux",
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         parsed_url = urlparse(url)
 
@@ -587,4 +588,5 @@ class UIUXAgent:
             },
             "viewports": results,
             "findings": findings,
+            "upstream_context": context or {},
         }

@@ -108,7 +108,10 @@ class OrchestrationAgent:
                 raise RuntimeError("One or more functionality steps failed.")
 
         elif agent == "uiux":
-            result = await self.uiux_agent.run(url)
+            result = await self.uiux_agent.run(
+                url,
+                context=task.get("context", {})
+            )
 
         elif agent == "time_simulation":
             await self.time_simulator.install_fake_clock()
