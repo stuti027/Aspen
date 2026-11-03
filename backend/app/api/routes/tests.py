@@ -136,7 +136,10 @@ async def run_uiux_test(
         await browser.stop()
 
 @router.post("/run-orchestration-test")
-async def run_orchestration_test(payload: OrchestrationRequest):
+async def run_orchestration_test(
+    payload: OrchestrationRequest,
+    request: Request
+):
 
     browser = BrowserManager(headless=True)
 
@@ -156,6 +159,40 @@ async def run_orchestration_test(payload: OrchestrationRequest):
             test_plan,
             max_retries=payload.max_retries
         )
+
+        base_url = str(request.base_url).rstrip("/")
+
+        def convert_screenshot_urls(uiux_result):
+            for viewport in uiux_result.get("viewports", []):
+                screenshot_path = viewport.get("screenshot")
+
+                if screenshot_path:
+                    filename = os.path.basename(screenshot_path)
+                    viewport["screenshot"] = (
+                        f"{base_url}/static/uiux/{filename}"
+                    )
+
+            for finding in uiux_result.get("findings", []):
+                screenshot_path = finding.get("screenshot")
+
+                if screenshot_path:
+                    filename = os.path.basename(screenshot_path)
+                    finding["screenshot"] = (
+                        f"{base_url}/static/uiux/{filename}"
+                    )
+
+
+        for item in results.get("results", []):
+            if item.get("agent") == "uiux":
+                convert_screenshot_urls(item.get("result", {}))
+
+
+        uiux_result = results.get(
+            "shared_context", {}
+        ).get("completed_results", {}).get("uiux")
+
+        if uiux_result:
+            convert_screenshot_urls(uiux_result)
 
         return {
             "status": results["status"],

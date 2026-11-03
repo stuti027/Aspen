@@ -49,6 +49,3 @@ def read_root():
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-backend_dir = Path(__file__).resolve().parent.parent 
-app.mount("/static", StaticFiles(directory=str(backend_dir / "static")), name="static")

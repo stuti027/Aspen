@@ -1,4 +1,7 @@
+
+import os
 from typing import Any
+
 from app.services.browser_manager import BrowserManager
 from app.agents.functionality_agent.functionality_agent import FunctionalityAgent
 from app.agents.time_simulation_agent import TimeSimulator
@@ -15,8 +18,8 @@ class OrchestrationAgent:
 
     EXECUTION_ORDER = {
         "functionality": 1,
-        "uiux": 2,
-        "time_simulation": 3
+        "time_simulation": 2,
+        "uiux": 3
     }
 
     def __init__(self, browser_manager: BrowserManager):
@@ -36,6 +39,9 @@ class OrchestrationAgent:
 
         if not url:
             raise ValueError("A target URL is required.")
+
+        if not selected_agents:
+            raise ValueError("At least one agent must be selected.")
 
         selected_agents = list(dict.fromkeys(
             agent.lower() for agent in selected_agents
@@ -93,44 +99,116 @@ class OrchestrationAgent:
         url = task_input["url"]
 
         if agent == "functionality":
-            steps = task_input.get("steps", [])
+
+            steps = list(task_input.get("steps", []))
 
             if not steps or steps[0].get("action") != "navigate":
-                steps = [
-                    {
-                        "action": "navigate",
-                        "params": {"url": url}
-                    }
-                ] + steps
+                steps.insert(
+                    0,
+                    {"action": "navigate", "params": {"url": url}}
+                )
 
-            result = await self.functionality_agent.run_workflow(steps)
-            if any(step.get("status") == "error" for step in result):
-                raise RuntimeError("One or more functionality steps failed.")
+            has_time_steps = any(
+                step.get("action") == "advance_time"
+                for step in steps
+            )
+
+            if has_time_steps:
+                await self.time_simulator.install_fake_clock()
+
+            result = []
+
+            for step in steps:
+                action = step.get("action")
+                params = step.get("params", {})
+
+                if action == "advance_time":
+
+                    milliseconds = params.get("milliseconds", 0)
+
+                    if milliseconds <= 0:
+                        raise ValueError(
+                            "Time advancement must be greater than zero."
+                        )
+
+                    await self.time_simulator.fast_forward(milliseconds)
+
+                    current_time = (
+                        await self.time_simulator.get_current_simulated_time()
+                    )
+
+                    result.append({
+                        "status": "success",
+                        "action": "advance_time",
+                        "milliseconds": milliseconds,
+                        "simulated_timestamp": current_time
+                    })
+
+                else:
+                    step_result = await self.functionality_agent.run_workflow(
+                        [step]
+                    )
+
+                    result.extend(step_result)
+
+                    if any(
+                        item.get("status") == "error"
+                        for item in step_result
+                    ):
+                        raise RuntimeError(
+                            "One or more functionality steps failed."
+                        )
 
         elif agent == "uiux":
+
+            os.makedirs("static/uiux", exist_ok=True)
+
             result = await self.uiux_agent.run(
                 url,
+                evidence_dir="static/uiux",
                 context=task.get("context", {})
             )
 
         elif agent == "time_simulation":
-            await self.time_simulator.install_fake_clock()
 
-            await self.browser.navigate(url)
+            functionality_results = task.get("context", {}).get(
+                "completed_results", {}
+            ).get("functionality", [])
 
-            time_jump_ms = task_input.get("time_jump_ms", 0)
+            time_advancements = [
+                item for item in functionality_results
+                if (
+                    item.get("action") == "advance_time"
+                    and item.get("status") == "success"
+                )
+            ]
 
-            if time_jump_ms > 0:
-                await self.time_simulator.fast_forward(time_jump_ms)
+            if time_advancements:
 
-            simulated_time = (
-                await self.time_simulator.get_current_simulated_time()
-            )
+                result = {
+                    "mode": "integrated",
+                    "time_advancements": time_advancements
+                }
 
-            result = {
-                "time_jump_ms": time_jump_ms,
-                "simulated_timestamp": simulated_time
-            }
+            else:
+
+                await self.time_simulator.install_fake_clock()
+                await self.browser.navigate(url)
+
+                time_jump_ms = task_input.get("time_jump_ms", 0)
+
+                if time_jump_ms > 0:
+                    await self.time_simulator.fast_forward(time_jump_ms)
+
+                simulated_time = (
+                    await self.time_simulator.get_current_simulated_time()
+                )
+
+                result = {
+                    "mode": "standalone",
+                    "time_jump_ms": time_jump_ms,
+                    "simulated_timestamp": simulated_time
+                }
 
         else:
             raise ValueError(f"Unsupported agent: {agent}")
@@ -151,16 +229,17 @@ class OrchestrationAgent:
             raise ValueError("max_retries cannot be negative.")
 
         execution_results = []
+
         shared_context = {
             "url": test_plan["url"],
             "completed_results": {}
         }
 
         for task in test_plan["execution_plan"]:
+
             task["status"] = "running"
             task["attempts"] = 0
 
-            # Share previously completed results with the next task.
             task["context"] = {
                 "url": shared_context["url"],
                 "completed_results": dict(
@@ -169,12 +248,15 @@ class OrchestrationAgent:
             }
 
             for attempt in range(max_retries + 1):
+
                 task["attempts"] += 1
 
                 try:
                     result = await self.execute_task(task)
 
                     task["status"] = "completed"
+                    task.pop("error", None)
+                    task.pop("reset_error", None)
 
                     execution_results.append({
                         **result,
@@ -187,17 +269,40 @@ class OrchestrationAgent:
 
                     break
 
-                except Exception as error:
-                    task["error"] = str(error)
+                except Exception as e:
+
+                    task["error"] = str(e)
+                    task["status"] = "failed"
+
+                    reset_failed = False
+
+                    try:
+                        await self.time_simulator.reset()
+
+                    except Exception as reset_error:
+                        task["reset_error"] = str(reset_error)
+                        reset_failed = True
+
+                    if reset_failed:
+
+                        if attempt == max_retries:
+                            execution_results.append({
+                                "agent": task["agent"],
+                                "status": "failed",
+                                "error": str(e),
+                                "reset_error": task["reset_error"],
+                                "attempts": task["attempts"]
+                            })
+
+                        break
 
                     if attempt == max_retries:
-                        task["status"] = "failed"
 
                         execution_results.append({
                             "agent": task["agent"],
                             "status": "failed",
-                            "attempts": task["attempts"],
-                            "error": str(error)
+                            "error": str(e),
+                            "attempts": task["attempts"]
                         })
 
         completed = sum(
