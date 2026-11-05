@@ -450,7 +450,7 @@ class BrowserAction(BaseModel):
 
 class ExplorationDecision(BaseModel):
     observation: str
-    actions: list[BrowserAction] = Field(max_length=3)
+    actions: list[BrowserAction] = Field(max_length=1)
     evaluation: str
 
 class UXFinding(BaseModel):
@@ -823,10 +823,13 @@ Explain your observation and choose the next action.
 
                         if (
                             target.scheme not in {"http", "https"}
-                            or (target.scheme, target.netloc) != initial_origin
+                            or target.hostname != parsed_url.hostname
+                            or target.port != parsed_url.port
+                            or target.username is not None
+                            or target.password is not None
                         ):
                             raise ValueError(
-                                "External navigation is not permitted."
+                                "External or unsafe navigation is not permitted."
                             )
 
                     elif control["tag"] == "button":
@@ -909,7 +912,7 @@ Explain your observation and choose the next action.
                     "reason": action.reason,
                     "error": str(exc)
                 })
-                break
+                continue
 
         return {
             "url": url,
