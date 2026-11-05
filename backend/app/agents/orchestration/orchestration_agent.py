@@ -6,6 +6,7 @@ from app.services.browser_manager import BrowserManager
 from app.agents.functionality_agent.functionality_agent import FunctionalityAgent
 from app.agents.time_simulation_agent import TimeSimulator
 from app.agents.uiux import UIUXAgent
+import json
 
 
 class OrchestrationAgent:
@@ -34,7 +35,8 @@ class OrchestrationAgent:
         url: str,
         selected_agents: list[str],
         functionality_steps: list[dict[str, Any]] | None = None,
-        time_jump_ms: int = 0
+        time_jump_ms: int = 0,
+        functionality_objective: str | None = None
     ) -> dict[str, Any]:
 
         if not url:
@@ -77,6 +79,8 @@ class OrchestrationAgent:
 
             if agent == "functionality":
                 task["input"]["steps"] = functionality_steps or []
+                if functionality_objective:
+                    task["input"]["objective"] = functionality_objective
 
             if agent == "time_simulation":
                 task["input"]["time_jump_ms"] = time_jump_ms
@@ -101,6 +105,14 @@ class OrchestrationAgent:
         if agent == "functionality":
 
             steps = list(task_input.get("steps", []))
+            generated_plan = None
+
+            if not steps and task_input.get("objective"):
+                generated_plan = await self.functionality_agent.generate_test_steps(
+                    url=url,
+                    objective=task_input["objective"]
+                )
+                steps = generated_plan["steps"]
 
             if not steps or steps[0].get("action") != "navigate":
                 steps.insert(
@@ -118,12 +130,11 @@ class OrchestrationAgent:
 
             result = []
 
-            for step in steps:
+            for step_index, step in enumerate(steps, start=1):
                 action = step.get("action")
                 params = step.get("params", {})
 
                 if action == "advance_time":
-
                     milliseconds = params.get("milliseconds", 0)
 
                     if milliseconds <= 0:
@@ -148,6 +159,8 @@ class OrchestrationAgent:
                     step_result = await self.functionality_agent.run_workflow(
                         [step]
                     )
+                    for item in step_result:
+                        item["step_index"] = step_index
 
                     result.extend(step_result)
 
@@ -155,8 +168,19 @@ class OrchestrationAgent:
                         item.get("status") == "error"
                         for item in step_result
                     ):
+                        failure_analysis = (
+                            await self.functionality_agent.analyze_failures(
+                                url=url,
+                                steps=steps,
+                                results=result
+                            )
+                        )
+
                         raise RuntimeError(
-                            "One or more functionality steps failed."
+                            json.dumps({
+                                "message": "One or more functionality steps failed.",
+                                "failure_analysis": failure_analysis
+                            })
                         )
 
         elif agent == "uiux":
@@ -270,8 +294,18 @@ class OrchestrationAgent:
                     break
 
                 except Exception as e:
+                    error_message = str(e)
 
-                    task["error"] = str(e)
+                    try:
+                        error_data = json.loads(error_message)
+                    except (json.JSONDecodeError, TypeError):
+                        error_data = {"message": error_message}
+
+                    task["error"] = error_data.get("message", error_message)
+
+                    if "failure_analysis" in error_data:
+                        task["failure_analysis"] = error_data["failure_analysis"]
+
                     task["status"] = "failed"
 
                     reset_failed = False
@@ -289,9 +323,10 @@ class OrchestrationAgent:
                             execution_results.append({
                                 "agent": task["agent"],
                                 "status": "failed",
-                                "error": str(e),
+                                "error": task.get("error", str(e)),
                                 "reset_error": task["reset_error"],
-                                "attempts": task["attempts"]
+                                "attempts": task["attempts"],
+                                "failure_analysis": task.get("failure_analysis")
                             })
 
                         break
@@ -301,8 +336,9 @@ class OrchestrationAgent:
                         execution_results.append({
                             "agent": task["agent"],
                             "status": "failed",
-                            "error": str(e),
-                            "attempts": task["attempts"]
+                            "error": task.get("error", str(e)),
+                            "attempts": task["attempts"],
+                            "failure_analysis": task.get("failure_analysis")
                         })
 
         completed = sum(
