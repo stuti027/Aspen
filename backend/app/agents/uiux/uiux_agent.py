@@ -8,7 +8,10 @@ from pydantic import BaseModel, Field
 from typing import Literal
 import json
 
-from app.services.llm_service import GeminiLLMService
+from app.services.llm_service import (
+    GeminiLLMService,
+    LLMServiceError
+)
 
 
 UI_SCAN_SCRIPT = r"""
@@ -611,6 +614,16 @@ class UIUXAgent:
                 "Emulation.clearDeviceMetricsOverride"
             )
 
+        exploration_result = await self.explore_website(
+            url=url,
+            evidence_dir=str(output_dir / "exploration"),
+            max_steps=4
+        )
+
+        llm_evaluation = await self.evaluate_exploration(
+            exploration=exploration_result
+        )
+
         findings.sort(
             key=lambda item: self.SEVERITY_ORDER.get(
                 item["severity"], 99
@@ -629,14 +642,27 @@ class UIUXAgent:
             "agent": "uiux",
             "url": url,
             "page_title": await self.browser.get_page_title(),
+
             "summary": {
                 "viewport_count": len(results),
                 "total_findings": len(findings),
                 "severity_counts": counts,
+                "llm_findings": len(llm_evaluation.get("findings", [])),
+                "llm_strengths": len(llm_evaluation.get("strengths", [])),
+                "llm_evaluation_status": llm_evaluation.get(
+                    "status", "completed"
+                )
             },
+
             "viewports": results,
+
             "findings": findings,
-            "upstream_context": context or {},
+
+            "llm_evaluation": llm_evaluation,
+
+            "exploration": exploration_result,
+
+            "upstream_context": context or {}
         }
 
     async def explore_website(
@@ -731,16 +757,30 @@ Evaluate the screenshot and current page state.
 Explain your observation and choose the next action.
 """
 
-            decision = await llm_service.generate_structured(
-                prompt=prompt,
-                output_schema=ExplorationDecision,
-                system_instruction=(
-                    "You are an autonomous human-centered UX evaluator. "
-                    "Be observant, evidence-driven and conservative "
-                    "with browser interactions."
-                ),
-                image_paths=[str(screenshot_path)]
-            )
+            try:
+                decision = await llm_service.generate_structured(
+                    prompt=prompt,
+                    output_schema=ExplorationDecision,
+                    system_instruction=(
+                        "You are an autonomous human-centered UX evaluator. "
+                        "Be observant, evidence-driven and conservative "
+                        "with browser interactions."
+                    ),
+                    image_paths=[str(screenshot_path)]
+                )
+
+            except LLMServiceError as exc:
+                history.append({
+                    "step": step + 1,
+                    "url": snapshot["url"],
+                    "observation": "UX exploration could not continue.",
+                    "evaluation": (
+                        "Gemini was temporarily unavailable or the request failed."
+                    ),
+                    "status": "llm_error",
+                    "error": type(exc).__name__
+                })
+                break
 
             history.append({
                 "step": step + 1,
@@ -878,7 +918,12 @@ Explain your observation and choose the next action.
             "actions_executed": len(executed_actions),
             "observations": history,
             "actions": executed_actions,
-            "screenshots": screenshots
+            "screenshots": screenshots,
+            "status": (
+                "partial"
+                if any(item.get("status") == "llm_error" for item in history)
+                else "completed"
+            ),
         }
 
     async def evaluate_exploration(
@@ -890,6 +935,24 @@ Explain your observation and choose the next action.
             raise ValueError("Invalid UIUX exploration result.")
 
         observations = exploration.get("observations", [])
+        if any(
+            item.get("status") == "llm_error"
+            for item in observations
+        ):
+            return {
+                "agent": "uiux_llm_evaluation",
+                "url": exploration.get("url"),
+                "status": "unavailable",
+                "pages_evaluated": len(observations),
+                "screenshots_used": 0,
+                "overall_summary": (
+                    "Consolidated evaluation skipped because "
+                    "exploration encountered an LLM failure."
+                ),
+                "strengths": [],
+                "findings": [],
+                "error": "ExplorationLLMFailure"
+            }
 
         if not observations:
             raise ValueError("No exploration observations available.")
@@ -949,16 +1012,35 @@ Executed browser actions:
 Produce a consolidated evaluation of the explored website.
 """
 
-        evaluation = await llm_service.generate_structured(
-            prompt=prompt,
-            output_schema=UXEvaluation,
-            system_instruction=(
-                "You are a rigorous human-centered UX evaluator. "
-                "Base conclusions on observed evidence. "
-                "Never invent usability problems."
-            ),
-            image_paths=valid_screenshots
-        )
+        try:
+            evaluation = await llm_service.generate_structured(
+                prompt=prompt,
+                output_schema=UXEvaluation,
+                system_instruction=(
+                    "You are a rigorous human-centered UX evaluator. "
+                    "Base conclusions on observed evidence. "
+                    "Never invent usability problems."
+                ),
+                image_paths=valid_screenshots
+            )
+
+        except LLMServiceError as exc:
+            return {
+                "agent": "uiux_llm_evaluation",
+                "url": exploration.get("url"),
+                "status": "unavailable",
+                "pages_evaluated": len({
+                    item.get("url") for item in observations
+                }),
+                "screenshots_used": len(valid_screenshots),
+                "overall_summary": (
+                    "Consolidated UX evaluation could not be completed "
+                    "because the LLM service was unavailable."
+                ),
+                "strengths": [],
+                "findings": [],
+                "error": type(exc).__name__
+            }
 
         return {
             "agent": "uiux_llm_evaluation",

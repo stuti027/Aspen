@@ -1,83 +1,96 @@
+
 import asyncio
-from pathlib import Path
+import unittest
+from unittest.mock import AsyncMock, patch
 
-from pydantic import BaseModel, Field
-
-from app.services.llm_service import GeminiLLMService
-
-
-class VisualFinding(BaseModel):
-    issue: str
-    user_impact: str
-    recommendation: str
-    confidence: str = Field(
-        description="High, medium, or low"
-    )
+from app.services.llm_service import (
+    GeminiLLMService,
+    LLMQuotaExceededError,
+    LLMUnavailableError,
+)
 
 
-class VisualEvaluation(BaseModel):
-    overall_assessment: str
-    strengths: list[str]
-    findings: list[VisualFinding]
+class SimulatedAPIError(Exception):
+    def __init__(self, status_code, message="Simulated API failure"):
+        super().__init__(message)
+        self.status_code = status_code
 
 
-async def main():
-    try:
-        screenshot = Path("artifacts/uiux/desktop.png")
+class TestGeminiReliability(unittest.IsolatedAsyncioTestCase):
 
-        if not screenshot.is_file():
-            raise FileNotFoundError(
-                f"Screenshot not found: {screenshot}. "
-                "Run the existing UIUX test first."
-            )
+    def setUp(self):
+        # Avoid initializing the actual Gemini client.
+        self.service = GeminiLLMService.__new__(GeminiLLMService)
 
-        llm_service = GeminiLLMService()
+    @patch("asyncio.sleep", new_callable=AsyncMock)
+    async def test_retries_then_succeeds(self, mock_sleep):
+        attempts = 0
 
-        result = await llm_service.generate_structured(
-            prompt="""
-            Evaluate this website screenshot from the perspective
-            of a real human visitor.
+        async def simulated_request():
+            nonlocal attempts
+            attempts += 1
 
-            Assess:
-            - Visual hierarchy and clarity
-            - Layout balance and consistency
-            - Ease of understanding the interface
-            - Discoverability of important actions
-            - Overall visual experience
+            if attempts < 3:
+                raise SimulatedAPIError(503)
 
-            Identify genuine usability or visual experience problems.
-            Do not invent issues that cannot be supported by the image.
-            Do not repeat basic technical accessibility checks.
+            return "Success"
 
-            Also identify what the website does well.
-            """,
-            output_schema=VisualEvaluation,
-            system_instruction=(
-                "You are an experienced UX researcher and "
-                "human-centered website evaluator."
-            ),
-            image_paths=[str(screenshot)]
+        result = await self.service._invoke_with_retry(
+            simulated_request,
+            "Test request"
         )
 
-        print("\nOverall Assessment:")
-        print(result.overall_assessment)
+        self.assertEqual(result, "Success")
+        self.assertEqual(attempts, 3)
+        self.assertEqual(mock_sleep.await_count, 2)
 
-        print("\nStrengths:")
-        for strength in result.strengths:
-            print(f"- {strength}")
+    @patch("asyncio.sleep", new_callable=AsyncMock)
+    async def test_stops_after_max_attempts(self, mock_sleep):
+        attempts = 0
 
-        print("\nHuman UX Findings:")
-        for finding in result.findings:
-            print(f"\nIssue: {finding.issue}")
-            print(f"User Impact: {finding.user_impact}")
-            print(f"Recommendation: {finding.recommendation}")
-            print(f"Confidence: {finding.confidence}")
+        async def simulated_request():
+            nonlocal attempts
+            attempts += 1
+            raise SimulatedAPIError(503)
 
-        print("\nVISION EVALUATION TEST PASSED")
+        with self.assertRaises(LLMUnavailableError):
+            await self.service._invoke_with_retry(
+                simulated_request,
+                "Test request"
+            )
 
-    except Exception as e:
-        print(f"\nVISION EVALUATION TEST FAILED: {e}")
+        self.assertEqual(
+            attempts,
+            self.service.MAX_ATTEMPTS
+        )
+
+        self.assertEqual(
+            mock_sleep.await_count,
+            self.service.MAX_ATTEMPTS - 1
+        )
+
+    @patch("asyncio.sleep", new_callable=AsyncMock)
+    async def test_quota_exhaustion_does_not_retry(self, mock_sleep):
+        attempts = 0
+
+        async def simulated_request():
+            nonlocal attempts
+            attempts += 1
+
+            raise SimulatedAPIError(
+                429,
+                "Daily quota exceeded"
+            )
+
+        with self.assertRaises(LLMQuotaExceededError):
+            await self.service._invoke_with_retry(
+                simulated_request,
+                "Test request"
+            )
+
+        self.assertEqual(attempts, 1)
+        mock_sleep.assert_not_awaited()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    unittest.main(verbosity=2)
