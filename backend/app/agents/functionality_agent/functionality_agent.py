@@ -1,3 +1,4 @@
+
 import asyncio
 import json
 from typing import Any, Dict, List, Literal
@@ -8,8 +9,6 @@ from pydantic import BaseModel, Field
 from app.services.browser_manager import BrowserManager
 from app.services.llm_service import GeminiLLMService, LLMServiceError
 
-
-# Structured output schemas
 
 class FunctionalityStep(BaseModel):
     action: Literal["navigate", "click", "fill", "screenshot"]
@@ -53,9 +52,17 @@ class ToolExecutor:
                 }
 
             if action_type == "navigate":
+
                 url = params.get("url")
 
-                parsed = urlparse(url or "")
+                if not isinstance(url, str):
+                    return {
+                        "status": "error",
+                        "message": "A valid URL string is required."
+                    }
+
+                url = url.strip()
+                parsed = urlparse(url)
 
                 if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                     return {
@@ -72,6 +79,7 @@ class ToolExecutor:
                 }
 
             elif action_type == "click":
+
                 selector = params.get("selector")
 
                 if not isinstance(selector, str) or not selector.strip():
@@ -80,7 +88,6 @@ class ToolExecutor:
                         "message": "A valid CSS selector is required."
                     }
 
-                # JSON encoding safely passes the selector into JavaScript.
                 selector_json = json.dumps(selector)
 
                 script = f"""
@@ -88,9 +95,10 @@ class ToolExecutor:
                         const selector = {selector_json};
                         const element = document.querySelector(selector);
 
-                        if (!element) return false;
+                        if (!element || element.disabled) return false;
 
                         element.click();
+
                         return true;
                     }})()
                 """
@@ -100,7 +108,7 @@ class ToolExecutor:
                 if not clicked:
                     return {
                         "status": "error",
-                        "message": f"Element not found: {selector}"
+                        "message": f"Element not found or disabled: {selector}"
                     }
 
                 return {
@@ -110,6 +118,7 @@ class ToolExecutor:
                 }
 
             elif action_type == "fill":
+
                 selector = params.get("selector")
                 value = params.get("value", "")
 
@@ -125,68 +134,7 @@ class ToolExecutor:
                         "message": "Input value must be a string."
                     }
 
-                selector_json = json.dumps(selector)
-                value_json = json.dumps(value)
-
-                script = f"""
-                    (() => {{
-                        const selector = {selector_json};
-                        const value = {value_json};
-                        const element = document.querySelector(selector);
-
-                        if (!element || element.disabled || element.readOnly) {{
-                            return false;
-                        }}
-
-                        if (
-                            element instanceof HTMLInputElement &&
-                            ["hidden", "password", "file", "submit",
-                             "button", "checkbox", "radio"].includes(element.type)
-                        ) {{
-                            return false;
-                        }}
-
-                        let prototype;
-
-                        if (element instanceof HTMLTextAreaElement) {{
-                            prototype = HTMLTextAreaElement.prototype;
-                        }} else if (element instanceof HTMLSelectElement) {{
-                            prototype = HTMLSelectElement.prototype;
-                        }} else if (element instanceof HTMLInputElement) {{
-                            prototype = HTMLInputElement.prototype;
-                        }} else {{
-                            return false;
-                        }}
-
-                        const setter = Object.getOwnPropertyDescriptor(
-                            prototype, "value"
-                        )?.set;
-
-                        if (!setter) return false;
-
-                        setter.call(element, value);
-
-                        element.dispatchEvent(
-                            new Event("input", {{ bubbles: true }})
-                        );
-
-                        element.dispatchEvent(
-                            new Event("change", {{ bubbles: true }})
-                        );
-
-                        return true;
-                    }})()
-                """
-
-                filled = await self.browser.evaluate_script(script)
-
-                if not filled:
-                    return {
-                        "status": "error",
-                        "message": (
-                            f"Input could not be found or safely filled: {selector}"
-                        )
-                    }
+                await self.browser.fill_input(selector, value)
 
                 return {
                     "status": "success",
@@ -195,7 +143,14 @@ class ToolExecutor:
                 }
 
             elif action_type == "screenshot":
+
                 path = params.get("path", "screenshot.png")
+
+                if not isinstance(path, str) or not path.strip():
+                    return {
+                        "status": "error",
+                        "message": "A valid screenshot path is required."
+                    }
 
                 await self.browser.capture_screenshot(path)
 
@@ -206,12 +161,14 @@ class ToolExecutor:
                 }
 
             else:
+
                 return {
                     "status": "error",
                     "message": f"Unknown action type: {action_type}"
                 }
 
         except Exception as exc:
+
             return {
                 "status": "error",
                 "message": str(exc)
@@ -242,7 +199,6 @@ class FunctionalityAgent:
         if not 1 <= max_steps <= 12:
             raise ValueError("max_steps must be between 1 and 12.")
 
-        # Load the website so Gemini can generate tests from actual controls.
         await self.browser.navigate(url)
 
         snapshot = await self.browser.get_interaction_snapshot()
@@ -271,6 +227,7 @@ Current page information:
 {json.dumps(page_context, ensure_ascii=False, default=str)}
 
 Requirements:
+
 - Generate at most {max_steps} steps.
 - Use only these actions: navigate, click, fill, screenshot.
 - Start with a navigate action using the target URL.
@@ -314,6 +271,7 @@ Requirements:
         results = []
 
         for index, step in enumerate(steps, start=1):
+
             action_type = step.get("action")
             params = step.get("params", {})
 
@@ -368,6 +326,7 @@ Failed steps and execution results:
 {json.dumps(failures, ensure_ascii=False, indent=2, default=str)}
 
 For each failure:
+
 - Identify the most likely cause based on the available evidence.
 - Explain why the action may have failed.
 - Recommend a specific next debugging or corrective step.
@@ -378,6 +337,7 @@ Provide an overall assessment and structured failure insights.
 """
 
         try:
+
             llm_service = GeminiLLMService()
 
             analysis = await llm_service.generate_structured(
@@ -396,6 +356,7 @@ Provide an overall assessment and structured failure insights.
             }
 
         except LLMServiceError as exc:
+
             return {
                 "status": "unavailable",
                 "overall_assessment": (

@@ -1,18 +1,23 @@
+
 import asyncio
 import json
 import subprocess
 import urllib.request
 from typing import Optional, Dict, Any
+
 import websockets
 import os
 import shutil
+import base64
+
 
 class BrowserManager:
+
     def __init__(self, headless: bool = False, debugging_port: int = 9222):
         self.headless = headless
         self.debugging_port = debugging_port
         self.browser_process: Optional[subprocess.Popen] = None
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.websocket = None
         self._message_id = 0
 
     def _get_next_id(self) -> int:
@@ -31,7 +36,7 @@ class BrowserManager:
                 f"Chrome executable not found: {chrome_path}. "
                 "Set the CHROME_PATH environment variable to its location."
             )
-        
+
         args = [
             chrome_path,
             f"--remote-debugging-port={self.debugging_port}",
@@ -40,40 +45,56 @@ class BrowserManager:
             "--user-data-dir=C:\\temp\\chrome_dev_session",
             "about:blank"
         ]
+
         if self.headless:
             args.append("--headless=new")
 
         self.browser_process = subprocess.Popen(
-            args, 
-            stdout=subprocess.DEVNULL, 
+            args,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        
+
         await asyncio.sleep(3)
 
         ws_url = self._get_websocket_target_url()
+
         if not ws_url:
-            raise RuntimeError("Could not retrieve Chrome DevTools Protocol WebSocket URL.")
+            raise RuntimeError(
+                "Could not retrieve Chrome DevTools Protocol WebSocket URL."
+            )
 
         self.websocket = await websockets.connect(ws_url)
 
     def _get_websocket_target_url(self) -> Optional[str]:
         try:
             url = f"http://127.0.0.1:{self.debugging_port}/json"
+
             with urllib.request.urlopen(url, timeout=3) as response:
                 data = json.loads(response.read().decode())
+
                 for target in data:
                     if target.get("type") == "page":
                         return target.get("webSocketDebuggerUrl")
+
         except Exception as e:
             print(f"Error fetching browser targets: {e}")
+
         return None
 
-    async def send_command(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def send_command(
+        self,
+        method: str,
+        params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+
         if not self.websocket:
-            raise RuntimeError("Browser session is not active. Call start() first.")
+            raise RuntimeError(
+                "Browser session is not active. Call start() first."
+            )
 
         msg_id = self._get_next_id()
+
         payload = {
             "id": msg_id,
             "method": method,
@@ -85,15 +106,20 @@ class BrowserManager:
         while True:
             response_str = await self.websocket.recv()
             response = json.loads(response_str)
+
             if response.get("id") == msg_id:
                 if "error" in response:
-                    raise RuntimeError(f"CDP Error for {method}: {response['error']}")
+                    raise RuntimeError(
+                        f"CDP Error for {method}: {response['error']}"
+                    )
+
                 return response.get("result", {})
 
     async def stop(self):
         if self.websocket:
             await self.websocket.close()
             self.websocket = None
+
         if self.browser_process:
             self.browser_process.terminate()
             self.browser_process.wait()
@@ -101,7 +127,10 @@ class BrowserManager:
 
     async def navigate(self, url: str):
         await self.send_command("Page.enable")
-        await self.send_command("Page.navigate", {"url": url})
+        await self.send_command(
+            "Page.navigate",
+            {"url": url}
+        )
         await asyncio.sleep(2)
 
     async def evaluate_script(self, expression: str) -> Any:
@@ -131,44 +160,78 @@ class BrowserManager:
         return title or ""
 
     async def capture_screenshot(self, filepath: str):
-        import base64
-        result = await self.send_command("Page.captureScreenshot", {"format": "png"})
+        result = await self.send_command(
+            "Page.captureScreenshot",
+            {"format": "png"}
+        )
+
         data = result.get("data")
+
         if data:
             binary_data = base64.b64decode(data)
+
+            directory = os.path.dirname(
+                os.path.abspath(filepath)
+            )
+
+            os.makedirs(directory, exist_ok=True)
+
             with open(filepath, "wb") as f:
                 f.write(binary_data)
 
     async def inspect_dom(self) -> Dict[str, Any]:
+
         script = """
         (() => {
-            const getElements = (selector, mapper) => Array.from(document.querySelectorAll(selector)).map(mapper);
-            
+            const getElements = (selector, mapper) =>
+                Array.from(document.querySelectorAll(selector)).map(mapper);
+
             return {
                 title: document.title,
                 url: window.location.href,
-                buttons: getElements('button, input[type="submit"], input[type="button"]', (el, idx) => ({
-                    tag: el.tagName.toLowerCase(),
-                    text: el.innerText || el.value || '',
-                    selector: `button:nth-of-type(${idx + 1})`,
-                    enabled: !el.disabled
-                })),
-                inputs: getElements('input:not([type="submit"]):not([type="button"]), textarea', el => ({
-                    type: el.type || 'text',
-                    name: el.name || '',
-                    placeholder: el.placeholder || ''
-                })),
-                links: getElements('a[href]', el => ({
-                    text: el.innerText.trim(),
-                    href: el.href
-                }))
+
+                buttons: getElements(
+                    'button, input[type="submit"], input[type="button"]',
+                    (el, idx) => ({
+                        tag: el.tagName.toLowerCase(),
+                        text: el.innerText || el.value || '',
+                        selector: `button:nth-of-type(${idx + 1})`,
+                        enabled: !el.disabled
+                    })
+                ),
+
+                inputs: getElements(
+                    'input:not([type="submit"]):not([type="button"]), textarea',
+                    el => ({
+                        type: el.type || 'text',
+                        name: el.name || '',
+                        placeholder: el.placeholder || ''
+                    })
+                ),
+
+                links: getElements(
+                    'a[href]',
+                    el => ({
+                        text: el.innerText.trim(),
+                        href: el.href
+                    })
+                )
             };
         })();
         """
+
         result = await self.evaluate_script(script)
-        return result or {"title": "", "url": "", "buttons": [], "inputs": [], "links": []}
+
+        return result or {
+            "title": "",
+            "url": "",
+            "buttons": [],
+            "inputs": [],
+            "links": []
+        }
 
     async def get_interaction_snapshot(self) -> Dict[str, Any]:
+
         script = """
         (() => {
             const isVisible = (el) => {
@@ -196,7 +259,6 @@ class BrowserManager:
                     current !== document.documentElement
                 ) {
                     let part = current.tagName.toLowerCase();
-
                     const parent = current.parentElement;
 
                     if (!parent) break;
@@ -244,7 +306,7 @@ class BrowserManager:
                         `${el.name || ""} ${el.id || ""} ${el.placeholder || ""}`
                     );
 
-                const fillable =
+                const fillable = (
                     (
                         (el.tagName === "INPUT" &&
                             ["text", "search"].includes(type)) ||
@@ -252,7 +314,8 @@ class BrowserManager:
                     ) &&
                     !el.disabled &&
                     !el.readOnly &&
-                    !sensitiveName;
+                    !sensitiveName
+                );
 
                 return {
                     selector: getSelector(el),
@@ -268,15 +331,18 @@ class BrowserManager:
             return {
                 title: document.title,
                 url: window.location.href,
+
                 viewport: {
                     width: window.innerWidth,
                     height: window.innerHeight
                 },
+
                 scroll: {
                     x: window.scrollX,
                     y: window.scrollY,
                     height: document.documentElement.scrollHeight
                 },
+
                 headings: Array.from(
                     document.querySelectorAll("h1, h2, h3")
                 )
@@ -286,9 +352,11 @@ class BrowserManager:
                     text: el.innerText.trim().slice(0, 200)
                 }))
                 .slice(0, 30),
+
                 page_text: (document.body.innerText || "")
                     .replace(/\\s+/g, " ")
                     .slice(0, 5000),
+
                 controls
             };
         })();
@@ -304,6 +372,7 @@ class BrowserManager:
         return result
 
     async def click_element(self, selector: str) -> Dict[str, Any]:
+
         selector_json = json.dumps(selector)
 
         element = await self.evaluate_script(f"""
@@ -371,7 +440,10 @@ class BrowserManager:
             }
         )
 
-        return {"success": True, "selector": selector}
+        return {
+            "success": True,
+            "selector": selector
+        }
 
     async def fill_input(
         self,
@@ -398,20 +470,34 @@ class BrowserManager:
                     return {{ error: "Element cannot be filled" }};
                 }}
 
+                const prototype = el instanceof HTMLTextAreaElement
+                    ? HTMLTextAreaElement.prototype
+                    : HTMLInputElement.prototype;
+
+                const setter = Object.getOwnPropertyDescriptor(
+                    prototype,
+                    "value"
+                )?.set;
+
+                if (!setter) {{
+                    return {{ error: "Native value setter unavailable" }};
+                }}
+
                 el.focus();
+                setter.call(el, {value_json});
 
-                const setter = el instanceof HTMLTextAreaElement
-                    ? HTMLTextAreaElement.prototype.value
-                    : HTMLInputElement.prototype.value;
+                el.dispatchEvent(
+                    new Event("input", {{ bubbles: true }})
+                );
 
-                Object.getOwnPropertyDescriptor(
-                    Object.getPrototypeOf(el), "value"
-                ).set.call(el, {value_json});
+                el.dispatchEvent(
+                    new Event("change", {{ bubbles: true }})
+                );
 
-                el.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                el.dispatchEvent(new Event("change", {{ bubbles: true }}));
-
-                return {{ success: true }};
+                return {{
+                    success: true,
+                    value: el.value
+                }};
             }})()
         """)
 
@@ -420,7 +506,10 @@ class BrowserManager:
                 result.get("error", "Unable to fill input")
             )
 
-        return {"success": True, "selector": selector}
+        return {
+            "success": True,
+            "selector": selector
+        }
 
     async def scroll_page(
         self,
@@ -456,19 +545,25 @@ class BrowserManager:
         await self.send_command("Runtime.enable")
 
     async def get_console_errors(self) -> list:
+
         script = """
         (() => {
-            // If we maintain an error log array on window or parse logs
             return window.__console_errors || [];
         })();
         """
+
         errors = await self.evaluate_script(script)
+
         return errors or []
 
     async def check_broken_links(self) -> list:
+
         script = """
         Array.from(document.querySelectorAll('a[href]')).map(a => a.href)
         """
+
         links = await self.evaluate_script(script) or []
+
         broken = []
-        return broken  
+
+        return broken

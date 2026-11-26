@@ -13,6 +13,9 @@ class ReportFinding(BaseModel):
     severity: Severity
     description: str
     evidence: str = ""
+    root_cause: str = "Not determined from the available evidence."
+    impact: str = "Impact could not be determined from the available evidence."
+    reproduction_steps: list[str] = Field(default_factory=list)
     recommendation: str = ""
     affected_url: str = ""
     selector: str | None = None
@@ -33,10 +36,9 @@ class TestStatistics(BaseModel):
     total_agents: int = 0
     completed_agents: int = 0
     failed_agents: int = 0
+    not_run_agents: int = 0
     total_findings: int = 0
-    severity_breakdown: SeveritySummary = Field(
-        default_factory=SeveritySummary
-    )
+    severity_breakdown: SeveritySummary = Field(default_factory=SeveritySummary)
 
 
 class TestReport(BaseModel):
@@ -47,3 +49,16 @@ class TestReport(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     findings: list[ReportFinding] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
+
+
+class FindingAnalysis(BaseModel):
+    finding_index: int
+    root_cause: str
+    impact: str
+    reproduction_steps: list[str] = Field(default_factory=list)
+
+
+class ReportNarrative(BaseModel):
+    executive_summary: str
+    recommendations: list[str] = Field(default_factory=list)
+    finding_analysis: list[FindingAnalysis] = Field(default_factory=list)

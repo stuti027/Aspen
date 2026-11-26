@@ -144,7 +144,7 @@ class OrchestrationAgent:
                             "Time advancement must be greater than zero."
                         )
 
-                    await self.time_simulator.fast_forward(milliseconds)
+                    timer_result = await self.time_simulator.fast_forward(milliseconds)
 
                     current_time = (
                         await self.time_simulator.get_current_simulated_time()
@@ -154,7 +154,11 @@ class OrchestrationAgent:
                         "status": "success",
                         "action": "advance_time",
                         "milliseconds": milliseconds,
-                        "simulated_timestamp": current_time
+                        "simulated_timestamp": current_time,
+                        "timer_errors": (
+                            timer_result.get("timer_errors", [])
+                            if isinstance(timer_result, dict) else []
+                        ),
                     })
 
                 else:
@@ -224,8 +228,9 @@ class OrchestrationAgent:
 
                 time_jump_ms = task_input.get("time_jump_ms", 0)
 
+                timer_result = {}
                 if time_jump_ms > 0:
-                    await self.time_simulator.fast_forward(time_jump_ms)
+                    timer_result = await self.time_simulator.fast_forward(time_jump_ms)
 
                 simulated_time = (
                     await self.time_simulator.get_current_simulated_time()
@@ -234,7 +239,11 @@ class OrchestrationAgent:
                 result = {
                     "mode": "standalone",
                     "time_jump_ms": time_jump_ms,
-                    "simulated_timestamp": simulated_time
+                    "simulated_timestamp": simulated_time,
+                    "timer_errors": (
+                        timer_result.get("timer_errors", [])
+                        if isinstance(timer_result, dict) else []
+                    ),
                 }
 
         else:
@@ -324,27 +333,28 @@ class OrchestrationAgent:
 
                     reset_failed = False
 
-                    try:
-                        await self.time_simulator.reset()
+                    if task["agent"] == "time_simulation":
+                        try:
+                            await self.time_simulator.reset()
 
-                    except Exception as reset_error:
-                        task["reset_error"] = str(reset_error)
-                        reset_failed = True
+                        except Exception as reset_error:
+                            task["reset_error"] = str(reset_error)
+                            reset_failed = True
 
                     if reset_failed:
-
-                        if attempt == max_retries:
-                            execution_results.append({
-                                "agent": task["agent"],
-                                "status": "failed",
-                                "error": task.get("error", str(e)),
-                                "reset_error": task["reset_error"],
-                                "attempts": task["attempts"],
-                                "failure_analysis": task.get(
-                                    "failure_analysis"
-                                )
-                            })
-
+                        # The browser/time state could not be reset safely.
+                        # Record the task as failed immediately instead of
+                        # silently counting it as not run.
+                        execution_results.append({
+                            "agent": task["agent"],
+                            "status": "failed",
+                            "error": task.get("error", str(e)),
+                            "reset_error": task["reset_error"],
+                            "attempts": task["attempts"],
+                            "failure_analysis": task.get(
+                                "failure_analysis"
+                            )
+                        })
                         break
 
                     if attempt == max_retries:
@@ -379,6 +389,9 @@ class OrchestrationAgent:
                 else "failed"
             ),
             "total_tasks": total,
+            "planned_agents": [
+                task["agent"] for task in test_plan["execution_plan"]
+            ],
             "completed_tasks": completed,
             "failed_tasks": failed,
             "results": execution_results,
