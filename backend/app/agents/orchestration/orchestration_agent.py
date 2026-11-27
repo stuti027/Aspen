@@ -1,12 +1,12 @@
-
 import os
+import json
 from typing import Any
 
 from app.services.browser_manager import BrowserManager
 from app.agents.functionality_agent.functionality_agent import FunctionalityAgent
 from app.agents.time_simulation_agent import TimeSimulator
 from app.agents.uiux import UIUXAgent
-import json
+from app.agents.report.report_agent import ReportAgent
 
 
 class OrchestrationAgent:
@@ -29,6 +29,7 @@ class OrchestrationAgent:
         self.functionality_agent = FunctionalityAgent(browser_manager)
         self.time_simulator = TimeSimulator(browser_manager)
         self.uiux_agent = UIUXAgent(browser_manager)
+        self.report_agent = ReportAgent()
 
     def create_test_plan(
         self,
@@ -79,6 +80,7 @@ class OrchestrationAgent:
 
             if agent == "functionality":
                 task["input"]["steps"] = functionality_steps or []
+
                 if functionality_objective:
                     task["input"]["objective"] = functionality_objective
 
@@ -105,13 +107,13 @@ class OrchestrationAgent:
         if agent == "functionality":
 
             steps = list(task_input.get("steps", []))
-            generated_plan = None
 
             if not steps and task_input.get("objective"):
                 generated_plan = await self.functionality_agent.generate_test_steps(
                     url=url,
                     objective=task_input["objective"]
                 )
+
                 steps = generated_plan["steps"]
 
             if not steps or steps[0].get("action") != "navigate":
@@ -142,7 +144,7 @@ class OrchestrationAgent:
                             "Time advancement must be greater than zero."
                         )
 
-                    await self.time_simulator.fast_forward(milliseconds)
+                    timer_result = await self.time_simulator.fast_forward(milliseconds)
 
                     current_time = (
                         await self.time_simulator.get_current_simulated_time()
@@ -152,13 +154,18 @@ class OrchestrationAgent:
                         "status": "success",
                         "action": "advance_time",
                         "milliseconds": milliseconds,
-                        "simulated_timestamp": current_time
+                        "simulated_timestamp": current_time,
+                        "timer_errors": (
+                            timer_result.get("timer_errors", [])
+                            if isinstance(timer_result, dict) else []
+                        ),
                     })
 
                 else:
                     step_result = await self.functionality_agent.run_workflow(
                         [step]
                     )
+
                     for item in step_result:
                         item["step_index"] = step_index
 
@@ -221,8 +228,9 @@ class OrchestrationAgent:
 
                 time_jump_ms = task_input.get("time_jump_ms", 0)
 
+                timer_result = {}
                 if time_jump_ms > 0:
-                    await self.time_simulator.fast_forward(time_jump_ms)
+                    timer_result = await self.time_simulator.fast_forward(time_jump_ms)
 
                 simulated_time = (
                     await self.time_simulator.get_current_simulated_time()
@@ -231,7 +239,11 @@ class OrchestrationAgent:
                 result = {
                     "mode": "standalone",
                     "time_jump_ms": time_jump_ms,
-                    "simulated_timestamp": simulated_time
+                    "simulated_timestamp": simulated_time,
+                    "timer_errors": (
+                        timer_result.get("timer_errors", [])
+                        if isinstance(timer_result, dict) else []
+                    ),
                 }
 
         else:
@@ -261,6 +273,8 @@ class OrchestrationAgent:
 
         for task in test_plan["execution_plan"]:
 
+            print("EXECUTING TASK:", task["agent"])
+
             task["status"] = "running"
             task["attempts"] = 0
 
@@ -278,6 +292,8 @@ class OrchestrationAgent:
                 try:
                     result = await self.execute_task(task)
 
+                    print("TASK RESULT:", result)
+
                     task["status"] = "completed"
                     task.pop("error", None)
                     task.pop("reset_error", None)
@@ -294,6 +310,9 @@ class OrchestrationAgent:
                     break
 
                 except Exception as e:
+
+                    print("TASK ERROR:", repr(e))
+
                     error_message = str(e)
 
                     try:
@@ -301,34 +320,41 @@ class OrchestrationAgent:
                     except (json.JSONDecodeError, TypeError):
                         error_data = {"message": error_message}
 
-                    task["error"] = error_data.get("message", error_message)
+                    task["error"] = error_data.get(
+                        "message", error_message
+                    )
 
                     if "failure_analysis" in error_data:
-                        task["failure_analysis"] = error_data["failure_analysis"]
+                        task["failure_analysis"] = error_data[
+                            "failure_analysis"
+                        ]
 
                     task["status"] = "failed"
 
                     reset_failed = False
 
-                    try:
-                        await self.time_simulator.reset()
+                    if task["agent"] == "time_simulation":
+                        try:
+                            await self.time_simulator.reset()
 
-                    except Exception as reset_error:
-                        task["reset_error"] = str(reset_error)
-                        reset_failed = True
+                        except Exception as reset_error:
+                            task["reset_error"] = str(reset_error)
+                            reset_failed = True
 
                     if reset_failed:
-
-                        if attempt == max_retries:
-                            execution_results.append({
-                                "agent": task["agent"],
-                                "status": "failed",
-                                "error": task.get("error", str(e)),
-                                "reset_error": task["reset_error"],
-                                "attempts": task["attempts"],
-                                "failure_analysis": task.get("failure_analysis")
-                            })
-
+                        # The browser/time state could not be reset safely.
+                        # Record the task as failed immediately instead of
+                        # silently counting it as not run.
+                        execution_results.append({
+                            "agent": task["agent"],
+                            "status": "failed",
+                            "error": task.get("error", str(e)),
+                            "reset_error": task["reset_error"],
+                            "attempts": task["attempts"],
+                            "failure_analysis": task.get(
+                                "failure_analysis"
+                            )
+                        })
                         break
 
                     if attempt == max_retries:
@@ -338,7 +364,9 @@ class OrchestrationAgent:
                             "status": "failed",
                             "error": task.get("error", str(e)),
                             "attempts": task["attempts"],
-                            "failure_analysis": task.get("failure_analysis")
+                            "failure_analysis": task.get(
+                                "failure_analysis"
+                            )
                         })
 
         completed = sum(
@@ -351,16 +379,34 @@ class OrchestrationAgent:
             if result["status"] == "failed"
         )
 
-        return {
+        total = len(test_plan["execution_plan"])
+
+        execution_summary = {
             "url": test_plan["url"],
             "status": (
-                "completed" if failed == 0
+                "completed" if completed == total
                 else "partially_completed" if completed > 0
                 else "failed"
             ),
-            "total_tasks": len(test_plan["execution_plan"]),
+            "total_tasks": total,
+            "planned_agents": [
+                task["agent"] for task in test_plan["execution_plan"]
+            ],
             "completed_tasks": completed,
             "failed_tasks": failed,
             "results": execution_results,
             "shared_context": shared_context
         }
+
+        try:
+            report = await self.report_agent.generate_report(
+                execution_summary
+            )
+
+            execution_summary["report"] = report.model_dump()
+
+        except Exception as report_error:
+            print("REPORT GENERATION ERROR:", repr(report_error))
+            execution_summary["report_error"] = str(report_error)
+
+        return execution_summary

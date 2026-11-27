@@ -1,9 +1,9 @@
 # Aspen
 ### AI-Powered Website Testing Platform
 
-Aspen is an AI-powered website testing platform that analyzes websites, identifies functionality and UI/UX issues, and generates structured testing results with supporting evidence.
+Aspen is an AI-powered website testing platform that analyzes websites, identifies functionality and UI/UX issues, and generates structured testing reports with supporting evidence.
 
-It combines browser automation, AI-powered test generation, multi-agent execution, and responsive UI analysis to evaluate website quality.
+It combines browser automation, AI-powered test generation, multi-agent execution, responsive UI analysis, and automated report generation to evaluate website quality.
 
 ## Development Progress
 
@@ -15,7 +15,7 @@ It combines browser automation, AI-powered test generation, multi-agent executio
 | Phase 4 | UI/UX Agent | Complete |
 | Phase 5 | Time Simulation Agent | Complete |
 | Phase 6 | Orchestration Agent | Complete |
-| Phase 7 | Report Agent | Upcoming |
+| Phase 7 | Report Agent | Complete |
 | Phase 8 | Frontend | Upcoming |
 
 ## Tech Stack
@@ -59,7 +59,7 @@ Analyzes websites across desktop, tablet, and mobile viewports using determinist
 - **Responsiveness:** Horizontal overflow and viewport boundary detection.
 - **Accessibility:** Form labels, accessible names, and heading hierarchy.
 - **Usability:** Placeholder links, small interactive targets, and disabled controls.
-- **AI-Powered Exploration:** Interacts with website elements to evaluate navigation, clarity, and user friction.
+- **AI-Powered Exploration:** Interacts with permitted website elements to evaluate navigation, clarity, and user friction.
 - **UX Evaluation:** Generates consolidated findings, strengths, and recommendations.
 
 **Viewports tested:**
@@ -94,6 +94,24 @@ Coordinates multiple testing agents through a unified execution workflow.
 - Maintains shared context containing completed agent results.
 - Handles execution failures and retries.
 - Preserves structured failure analysis in the final execution response.
+- Passes agent results to the Report Agent for report generation.
+
+### 5. Report Agent
+
+Generates structured testing reports by consolidating results from the executed agents.
+
+**Capabilities:**
+- Generates an executive summary of the testing execution.
+- Consolidates findings and recommendations.
+- Classifies findings by severity.
+- Summarizes agent execution statistics.
+- Identifies positive website characteristics and strengths.
+- Produces structured report data for storage and retrieval.
+
+**Report persistence:**
+- Stores generated reports in PostgreSQL.
+- Supports retrieving a list of previously generated reports.
+- Supports retrieving an individual report using its report ID.
 
 ## Shared AI Service
 
@@ -118,6 +136,9 @@ The shared service provides consistent LLM integration and error handling across
 | `/api/auth/login` | POST | User authentication |
 | `/api/tests/run-custom-test` | POST | Functionality testing |
 | `/api/tests/run-uiux-test` | POST | UI/UX analysis |
+| `/tests/run-orchestration-test` | POST | Multi-agent orchestration |
+| `/tests/reports` | GET | Retrieve saved reports |
+| `/tests/reports/{report_id}` | GET | Retrieve an individual report |
 
 Swagger documentation: `http://127.0.0.1:8000/docs`
 
@@ -127,7 +148,7 @@ The implemented agents and orchestration workflow have been tested using real br
 
 **Integration testing covered:**
 - Gemini-generated functionality test plans.
-- Browser navigation, clicking, and screenshot capture.
+- Browser navigation, clicking, form filling, and screenshot capture.
 - UI/UX analysis across all three viewport configurations.
 - AI-powered website exploration and evaluation.
 - Simulated time advancement.
@@ -135,12 +156,16 @@ The implemented agents and orchestration workflow have been tested using real br
 - Failure detection and AI-generated failure diagnosis.
 - Propagation of structured failure analysis through orchestration.
 - Gemini retry and fallback behaviour.
+- Report generation and severity classification.
+- Report persistence in PostgreSQL.
+- Report listing and individual report retrieval.
 
 ### UI/UX Agent Testing
 
 Testing was conducted using:
 - A controlled HTML page containing deliberately introduced UI/UX issues.
 - Wikipedia (`https://www.wikipedia.org/`).
+- SauceDemo (`https://www.saucedemo.com/`).
 
 **Controlled test results:**
 
@@ -152,6 +177,19 @@ Testing was conducted using:
 | Low | 4 |
 
 Testing covered all three viewport configurations. Screenshot generation and browser cleanup were also verified.
+
+### Orchestration and Report Testing
+
+An integrated execution was conducted using SauceDemo with the Functionality, Time Simulation, and UI/UX agents.
+
+The execution verified:
+- Successful execution of all three selected agents.
+- Functionality workflow execution and screenshot capture.
+- Simulated time advancement.
+- UI/UX exploration and evaluation.
+- Consolidation of agent results.
+- Generation of a structured report.
+- Storage and retrieval of the generated report from PostgreSQL.
 
 ## Setup and Execution
 
@@ -210,5 +248,6 @@ uvicorn app.main:app --reload
 
 **Swagger:** `http://127.0.0.1:8000/docs`
 
+---
 
-**Current Status: Phases 1–6 complete. Report Agent and frontend development are upcoming.**
+**Current Status: Phases 1–7 complete. Frontend development (Phase 8) is upcoming.**
